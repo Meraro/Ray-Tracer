@@ -1,7 +1,7 @@
 #ifndef ANTIALIASING_H
 #define ANTIALIASING_H
 
-#include "rt_common.h"
+#include "random.h"
 #include <algorithm>
 #include <memory>
 
