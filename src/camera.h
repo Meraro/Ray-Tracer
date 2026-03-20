@@ -24,6 +24,9 @@ public:
     point3 lookat = point3(0, 0, -1);
     vec3 vup = vec3(0, 1, 0);
 
+    double defocus_angle = 0;   // Variation angle of rays through each pixel
+    double focus_dist = 10;     // Distance from camera lookfrom point to plane of perfect focus
+
     camera() = default;
 
     camera(double aspect_ratio, int image_width) : 
@@ -68,9 +71,11 @@ private:
     int image_height;               // Rendered image height
     point3 center;                  // Camera center
     point3 pixel00_loc;             // Location of pixel 0, 0
-    vec3 pixel_delta_v;             // Offset to pixel to the right
-    vec3 pixel_delta_u;             // Offset to pixel below
+    vec3 pixel_delta_u;             // Offset to pixel to the right
+    vec3 pixel_delta_v;             // Offset to pixel below
     vec3 u, v, w;                   // Camera frame basis vectors
+    vec3 defocus_disk_u;            // Defocus disk horizontal radius
+    vec3 defocus_disk_v;            // Defocus disk vertical radius
     std::shared_ptr<const antialiasing> antialiasing_strategy 
         = std::make_shared<antialiasing_off>();
     
@@ -80,10 +85,10 @@ private:
 
         center = lookfrom;
 
-        auto focal_length = (lookfrom - lookat).length();
+        // auto focal_length = (lookfrom - lookat).length();
         auto theta = degrees_to_radians(vfov);
         auto h = std::tan(theta/2);
-        auto viewport_height = 2 * h * focal_length;
+        auto viewport_height = 2 * h * focus_dist;
         auto viewport_width = viewport_height * (static_cast<double>(image_width) / image_height);
 
         w = unit_vector(lookfrom - lookat);
@@ -98,19 +103,32 @@ private:
         pixel_delta_v = viewport_v / image_height;
 
         auto viewport_upper_left = 
-            center - (focal_length * w) - 0.5*(viewport_u + viewport_v);
+            center - (focus_dist * w) - 0.5*(viewport_u + viewport_v);
         pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
+
+        auto defocus_radius = focus_dist * std::tan(degrees_to_radians(defocus_angle / 2));
+        defocus_disk_u = u * defocus_radius;
+        defocus_disk_v = v * defocus_radius;
     }
 
     ray get_ray(int i, int j, const aa_sample& sample) const {
+        // Construct a camera ray originating from the defocus disk and directed at a randomly
+        // sampled point around the pixel location i, j.
+
         auto pixel_sample = pixel00_loc
             + ((i + sample.offset_u) * pixel_delta_u)
             + ((j + sample.offset_v) * pixel_delta_v);
         
-        auto ray_origin = center;
+        auto ray_origin = (defocus_angle <= 0) ? center : defocus_disk_sample();
         auto ray_direction = pixel_sample - ray_origin;
 
         return ray(ray_origin, ray_direction);
+    }
+
+    point3 defocus_disk_sample() const {
+        // Returns a random point in the camera defocus disk.
+        auto p = random_in_unit_disk();
+        return center + (p[0] * defocus_disk_u) + (p[1] * defocus_disk_v);
     }
 
     color ray_color(const ray& r, int depth, const hittable& world) const {
