@@ -18,6 +18,7 @@ public:
     double  aspect_ratio    = 16.0 / 9.0;
     int     image_width     = 800;
     int     max_depth       = 100;    
+    color background;
 
     double vfov = 90;
     point3 lookfrom = point3(0, 0, 0);
@@ -133,19 +134,23 @@ private:
     }
 
     color ray_color(const ray& r, int depth, const hittable& world) const {
-        if (depth-- <= 0)
+        if (depth <= 0)
             return color(0, 0, 0);
         hit_record rec;
 
-        if (world.hit(r, interval(0.001, infinity), rec)) {
-            ray scattered;
-            color attenuation;
-            if (rec.mat->scatter(r, rec, attenuation, scattered)) 
-                return attenuation * ray_color(scattered, depth, world);
-            return color(0, 0, 0);
-        }
+        if (!world.hit(r, interval(0.001, infinity), rec))
+            return background;
+        
+        ray scattered;
+        color attenuation;
+        color color_from_emission = rec.mat->emitted(rec.u, rec.v, rec.p);
 
-        return render_sky(r);
+        if (!rec.mat->scatter(r, rec, attenuation, scattered))
+            return color_from_emission;
+        
+        color color_from_scatter = attenuation * ray_color(scattered, depth-1, world);
+
+        return color_from_emission + color_from_scatter;
     }
 
     color render_sky(const ray& r) const {
