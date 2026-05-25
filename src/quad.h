@@ -28,7 +28,8 @@ public:
 
     aabb bounding_box() const override { return bbox; };
 
-    bool hit(const ray& r, interval ray_t, hit_record& rec) const override {
+    bool hit(const ray& r, interval ray_t, hit_record& rec, const hit_context& context) const override {
+        (void)context;
         auto denom = dot(normal, r.direction());
 
         if (std::fabs(denom) < 1e-8) return false;

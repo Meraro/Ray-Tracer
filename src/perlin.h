@@ -6,14 +6,16 @@
 #include "random.h"
 class perlin {
   public:
-    perlin() {
+    perlin() = delete;
+
+    explicit perlin(random_source& rng) {
         for (int i=0 ; i<point_count; ++i) {
-            randvec[i] = unit_vector(vec3::random(-1, 1));
+            randvec[i] = unit_vector(vec3::random(-1, 1, rng));
         }
 
-        perlin_generate_perm(perm_x);
-        perlin_generate_perm(perm_y);
-        perlin_generate_perm(perm_z);
+        perlin_generate_perm(perm_x, rng);
+        perlin_generate_perm(perm_y, rng);
+        perlin_generate_perm(perm_z, rng);
     }
 
     double noise(const point3& p) const {
@@ -60,16 +62,16 @@ class perlin {
     int perm_y[point_count];
     int perm_z[point_count];
 
-    static void perlin_generate_perm(int* p) {
+    static void perlin_generate_perm(int* p, random_source& rng) {
         for (int i=0 ; i<point_count ; ++i)
             p[i] = i;
 
-        permute(p, point_count);
+        permute(p, point_count, rng);
     }
 
-    static void permute(int* p, int n) {
+    static void permute(int* p, int n, random_source& rng) {
         for (int i=n-1 ; i>0 ; --i) {
-            int target = random_int(0, i);
+            int target = rng.random_int(0, i);
             int tmp = p[i];
             p[i] = p[target];
             p[target] = tmp;

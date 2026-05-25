@@ -10,13 +10,22 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <stdexcept>
 
 class bvh_node: public hittable {
 public:
-    bvh_node(hittable_list list) : bvh_node(list.objects, 0, list.objects.size()) {}
+    bvh_node(hittable_list list) = delete;
 
-    bvh_node(std::vector<std::shared_ptr<hittable>>& objects, size_t start, size_t end) {
-        int axis = random_int(0, 2);
+    bvh_node(hittable_list list, random_source& rng) : bvh_node(list.objects, 0, list.objects.size(), rng) {}
+
+    bvh_node(std::vector<std::shared_ptr<hittable>>& objects, size_t start, size_t end) = delete;
+
+    bvh_node(std::vector<std::shared_ptr<hittable>>& objects, size_t start, size_t end, random_source& rng) {
+        if (start >= end) {
+            throw std::invalid_argument("bvh_node requires at least one object");
+        }
+
+        int axis = rng.random_int(0, 2);
 
         auto comparator = (axis == 0) ? box_x_compare
                         : (axis == 1) ? box_y_compare
@@ -33,22 +42,23 @@ public:
             std::sort(std::begin(objects)+start, std::begin(objects)+end, comparator);
 
             auto mid = start + span/2;
-            left = make_shared<bvh_node>(objects, start, mid);
-            right = make_shared<bvh_node>(objects, mid, end);
+            left = make_shared<bvh_node>(objects, start, mid, rng);
+            right = make_shared<bvh_node>(objects, mid, end, rng);
         }
 
         bbox = aabb(left->bounding_box(), right->bounding_box());
     }
 
-    bool hit(const ray& r, interval ray_t, hit_record& rec) const override {
+    bool hit(const ray& r, interval ray_t, hit_record& rec, const hit_context& context) const override {
         if (!bbox.hit(r, ray_t))
             return false;
 
-        bool hit_left = left->hit(r, ray_t, rec);
+        bool hit_left = left->hit(r, ray_t, rec, context);
         bool hit_right = right->hit(
             r, 
             interval(ray_t.min, hit_left ? rec.t : ray_t.max), 
-            rec
+            rec,
+            context
         );
 
         return hit_left || hit_right;

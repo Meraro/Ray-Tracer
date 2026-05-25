@@ -1,328 +1,414 @@
-#include "hittable.h"
-#include "rt_common.h"
-#include "quad.h"
-#include "antialiasing.h"
-#include "hittable_list.h"
-#include "material.h"
-#include "sphere.h"
-#include "camera.h"
-#include "texture.h"
-#include "vec3.h"
-#include "bvh.h"
-#include "constant_medium.h"
+#include "benchmark.h"
+#include "renderer.h"
+#include "scene_presets.h"
+#include "world_builder.h"
 
-#include <memory>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
-void bouncing_spheres() {
-    hittable_list world;
+namespace {
 
-    auto checker = std::make_shared<checker_texture>(0.32, color(.2, .3, .1), color(.9,.9,.9));
-    world.add(make_shared<sphere>(point3(0,-1000,0), 1000, make_shared<lambertian>(checker)));
-    
-    for (int a = -11; a < 11; a++) {
-        for (int b = -11; b < 11; b++) {
-            auto choose_mat = random_double();
-            point3 center(a + 0.9*random_double(), 0.2, b + 0.9*random_double());
+struct sampling_override {
+    bool enabled = false;
+    sampling_pattern pattern = sampling_pattern::aa_off;
+    int parameter = 1;
+};
 
-            if ((center - point3(4, 0.2, 0)).length() > 0.9) {
-                shared_ptr<material> sphere_material;
+struct parsed_arguments {
+    std::vector<std::string> positional;
+    std::string reference_path;
+    std::string output_path;
+    std::string error;
+    bool show_progress = true;
+    int thread_count = 1;
+    int tile_size = 16;
+};
 
-                if (choose_mat < 0.8) {
-                    // diffuse
-                    auto albedo = color::random() * color::random();
-                    sphere_material = make_shared<lambertian>(albedo);
-                    world.add(make_shared<sphere>(center, 0.2, sphere_material));
-                } else if (choose_mat < 0.95) {
-                    // metal
-                    auto albedo = color::random(0.5, 1);
-                    auto fuzz = random_double(0, 0.5);
-                    sphere_material = make_shared<metal>(albedo, fuzz);
-                    world.add(make_shared<sphere>(center, 0.2, sphere_material));
-                } else {
-                    // glass
-                    sphere_material = make_shared<dielectric>(1.5);
-                    world.add(make_shared<sphere>(center, 0.2, sphere_material));
-                }
+bool is_option_token(const std::string& value) {
+    return value.rfind("--", 0) == 0;
+}
+
+parsed_arguments parse_arguments(int argc, char* argv[]) {
+    parsed_arguments result;
+
+    for (int index = 1; index < argc; ++index) {
+        const std::string value = argv[index];
+        if (value == "--reference" || value == "--ref") {
+            if (index + 1 < argc && !is_option_token(argv[index + 1])) {
+                result.reference_path = argv[++index];
+            } else {
+                result.error = "missing_reference_path";
             }
+            continue;
         }
+
+        if (value == "--output" || value == "--out") {
+            if (index + 1 < argc && !is_option_token(argv[index + 1])) {
+                result.output_path = argv[++index];
+            } else {
+                result.error = "missing_output_path";
+            }
+            continue;
+        }
+
+        if (value == "--no-progress") {
+            result.show_progress = false;
+            continue;
+        }
+
+        if (value == "--progress") {
+            result.show_progress = true;
+            continue;
+        }
+
+        if (value == "--threads") {
+            if (index + 1 < argc) {
+                const std::string thread_count = argv[++index];
+                char* end = nullptr;
+                errno = 0;
+                const long parsed_thread_count = std::strtol(thread_count.c_str(), &end, 10);
+                if (errno == ERANGE || end == thread_count.c_str() || *end != '\0' || parsed_thread_count <= 0) {
+                    result.error = "invalid_thread_count";
+                } else {
+                    result.thread_count = static_cast<int>(parsed_thread_count);
+                }
+            } else {
+                result.error = "missing_thread_count";
+            }
+            continue;
+        }
+
+        if (value == "--tile-size") {
+            if (index + 1 < argc) {
+                const std::string tile_size = argv[++index];
+                char* end = nullptr;
+                errno = 0;
+                const long parsed_tile_size = std::strtol(tile_size.c_str(), &end, 10);
+                if (errno == ERANGE || end == tile_size.c_str() || *end != '\0' || parsed_tile_size <= 0) {
+                    result.error = "invalid_tile_size";
+                } else {
+                    result.tile_size = static_cast<int>(parsed_tile_size);
+                }
+            } else {
+                result.error = "missing_tile_size";
+            }
+            continue;
+        }
+
+        if (is_option_token(value)) {
+            result.error = "unknown_option";
+            continue;
+        }
+
+        result.positional.push_back(value);
     }
 
-    auto material1 = make_shared<dielectric>(1.5);
-    world.add(make_shared<sphere>(point3(0, 1, 0), 1.0, material1));
-
-    auto material2 = make_shared<lambertian>(color(0.4, 0.2, 0.1));
-    world.add(make_shared<sphere>(point3(-4, 1, 0), 1.0, material2));
-
-    auto material3 = make_shared<metal>(color(0.7, 0.6, 0.5), 0.0);
-    world.add(make_shared<sphere>(point3(4, 1, 0), 1.0, material3));
-
-    world = hittable_list(make_shared<bvh_node>(world));
-
-    double aspect_ratio = 16.0 / 9.0;
-    int image_width = 800;
-    std::shared_ptr<const antialiasing> aa_strategy = std::make_shared<random_antialiasing>(5);
-    
-    camera cam(aspect_ratio, image_width);
-    cam.aspect_ratio = 16.0 / 9.0;
-    cam.image_width = 1200;
-    cam.max_depth = 50;
-    cam.background        = color(0.70, 0.80, 1.00);
-
-    cam.vfov = 20;
-    cam.lookfrom = point3(13,2,3);
-    cam.lookat   = point3(0,0,0);
-    cam.vup      = vec3(0,1,0);
-
-
-    cam.defocus_angle = 0.6;
-    cam.focus_dist = 10.0;
-
-    cam.set_antialiasing(aa_strategy);
-    // aa_strategy = std::make_shared<random_antialiasing>(50);
-    // aa_strategy = std::make_shared<grid_antialiasing>(4);
-    // aa_strategy = std::make_shared<jittered_grid_antialiasing>(4);
-
-    
-    cam.render(world);
+    return result;
 }
 
-void checkered_spheres() {
-    hittable_list world;
+bool parse_uint64_value(const std::string& value, std::uint64_t& parsed) {
+    if (value.empty() || value[0] == '-') {
+        return false;
+    }
 
-    auto checker = make_shared<checker_texture>(0.32, color(.2, .3, .1), color(.9, .9, .9));
+    char* end = nullptr;
+    errno = 0;
+    const auto raw = std::strtoull(value.c_str(), &end, 10);
+    if (errno == ERANGE || end == value.c_str() || *end != '\0') {
+        return false;
+    }
 
-    world.add(make_shared<sphere>(point3(0,-10, 0), 10, make_shared<lambertian>(checker)));
-    world.add(make_shared<sphere>(point3(0, 10, 0), 10, make_shared<lambertian>(checker)));
-
-    camera cam;
-
-    cam.aspect_ratio      = 16.0 / 9.0;
-    cam.image_width       = 800;
-    cam.max_depth         = 50;
-    cam.background        = color(0.70, 0.80, 1.00);
-    cam.set_antialiasing(make_shared<random_antialiasing>(10));
-
-    cam.vfov     = 20;
-    cam.lookfrom = point3(13,2,3);
-    cam.lookat   = point3(0,0,0);
-    cam.vup      = vec3(0,1,0);
-
-    cam.defocus_angle = 0;
-
-    cam.render(world);
+    parsed = static_cast<std::uint64_t>(raw);
+    return true;
 }
 
-void earth() {
-    auto earth_texture = make_shared<image_texture>("earthmap.jpg");
-    auto earth_surface = make_shared<lambertian>(earth_texture);
-    auto globe = make_shared<sphere>(point3(0,0,0), 2, earth_surface);
+bool parse_positive_int_value(const std::string& value, int& parsed) {
+    std::uint64_t raw = 0;
+    if (!parse_uint64_value(value, raw) || raw == 0 || raw > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
 
-    camera cam;
-
-    cam.aspect_ratio      = 16.0 / 9.0;
-    cam.image_width       = 400;
-    cam.max_depth         = 50;
-    cam.background        = color(0.70, 0.80, 1.00);
-    cam.set_antialiasing(make_shared<random_antialiasing>(50));
-
-    cam.vfov     = 20;
-    cam.lookfrom = point3(0,0,12);
-    cam.lookat   = point3(0,0,0);
-    cam.vup      = vec3(0,1,0);
-
-    cam.defocus_angle = 0;
-
-    cam.render(hittable_list(globe));
+    parsed = static_cast<int>(raw);
+    return true;
 }
 
-void perlin_spheres() {
-    hittable_list world;
+scene_id parse_scene_id(const std::vector<std::string>& positional, std::string& error) {
+    if (positional.empty()) {
+        return scene_id::cornell_smoke;
+    }
 
-    auto pertext = make_shared<noise_texture>(4);
-    world.add(make_shared<sphere>(point3(0,-1000,0), 1000, make_shared<lambertian>(pertext)));
-    world.add(make_shared<sphere>(point3(0,2,0), 2, make_shared<lambertian>(pertext)));
+    int raw_scene_id = 0;
+    if (!parse_positive_int_value(positional[0], raw_scene_id)) {
+        error = "invalid_scene_id";
+        return scene_id::cornell_smoke;
+    }
 
-    camera cam;
-
-    cam.aspect_ratio      = 16.0 / 9.0;
-    cam.image_width       = 400;
-    cam.max_depth         = 50;
-    cam.background        = color(0.70, 0.80, 1.00);
-    cam.set_antialiasing(make_shared<random_antialiasing>(50));
-
-    cam.vfov     = 20;
-    cam.lookfrom = point3(13,2,3);
-    cam.lookat   = point3(0,0,0);
-    cam.vup      = vec3(0,1,0);
-
-    cam.defocus_angle = 0;
-
-    cam.render(world);
+    switch (raw_scene_id) {
+        case 1: return scene_id::bouncing_spheres;
+        case 2: return scene_id::checkered_spheres;
+        case 3: return scene_id::earth;
+        case 4: return scene_id::perlin_spheres;
+        case 5: return scene_id::quads;
+        case 6: return scene_id::simple_light;
+        case 7: return scene_id::cornell_box;
+        case 8: return scene_id::cornell_smoke;
+        case 9: return scene_id::final_scene;
+        default:
+            error = "invalid_scene_id";
+            return scene_id::cornell_smoke;
+    }
 }
 
-void quads() {
-    hittable_list world;
+std::uint64_t parse_seed_arg(
+    const std::vector<std::string>& positional,
+    size_t index,
+    std::uint64_t fallback,
+    const char* error_name,
+    std::string& error
+) {
+    if (index >= positional.size()) {
+        return fallback;
+    }
 
-    // Materials
-    auto left_red     = make_shared<lambertian>(color(1.0, 0.2, 0.2));
-    auto back_green   = make_shared<lambertian>(color(0.2, 1.0, 0.2));
-    auto right_blue   = make_shared<lambertian>(color(0.2, 0.2, 1.0));
-    auto upper_orange = make_shared<lambertian>(color(1.0, 0.5, 0.0));
-    auto lower_teal   = make_shared<lambertian>(color(0.2, 0.8, 0.8));
+    std::uint64_t parsed = 0;
+    if (!parse_uint64_value(positional[index], parsed)) {
+        error = error_name;
+        return fallback;
+    }
 
-    // Quads
-    world.add(make_shared<quad>(point3(-3,-2, 5), vec3(0, 0,-4), vec3(0, 4, 0), left_red));
-    world.add(make_shared<quad>(point3(-2,-2, 0), vec3(4, 0, 0), vec3(0, 4, 0), back_green));
-    world.add(make_shared<quad>(point3( 3,-2, 1), vec3(0, 0, 4), vec3(0, 4, 0), right_blue));
-    world.add(make_shared<quad>(point3(-2, 3, 1), vec3(4, 0, 0), vec3(0, 0, 4), upper_orange));
-    world.add(make_shared<quad>(point3(-2,-3, 5), vec3(4, 0, 0), vec3(0, 0,-4), lower_teal));
-
-    camera cam;
-
-    cam.aspect_ratio      = 1.0;
-    cam.image_width       = 400;
-    cam.max_depth         = 50;
-    cam.background        = color(0.70, 0.80, 1.00);
-    cam.set_antialiasing(make_shared<random_antialiasing>(50));
-
-    cam.vfov     = 80;
-    cam.lookfrom = point3(0,0,9);
-    cam.lookat   = point3(0,0,0);
-    cam.vup      = vec3(0,1,0);
-
-    cam.defocus_angle = 0;
-
-    cam.render(world);
+    return parsed;
 }
 
-void simple_light() {
-    hittable_list world;
+int parse_int_arg(
+    const std::vector<std::string>& positional,
+    size_t index,
+    int fallback,
+    const char* error_name,
+    std::string& error
+) {
+    if (index >= positional.size()) {
+        return fallback;
+    }
 
-    auto pertext = make_shared<noise_texture>(4);
-    world.add(make_shared<sphere>(point3(0,-1000,0), 1000, make_shared<lambertian>(pertext)));
-    world.add(make_shared<sphere>(point3(0,2,0), 2, make_shared<lambertian>(pertext)));
+    int parsed = 0;
+    if (!parse_positive_int_value(positional[index], parsed)) {
+        error = error_name;
+        return fallback;
+    }
 
-    auto difflight = make_shared<diffuse_light>(color(4,4,4));
-    world.add(make_shared<sphere>(point3(0,7,0), 2, difflight));
-    world.add(make_shared<quad>(point3(3,1,-2), vec3(2,0,0), vec3(0,2,0), difflight));
-
-    camera cam;
-
-    cam.aspect_ratio      = 16.0 / 9.0;
-    cam.image_width       = 400;
-    cam.set_antialiasing(make_shared<random_antialiasing>(100));
-    cam.max_depth         = 50;
-    cam.background        = color(0,0,0);
-
-    cam.vfov     = 20;
-    cam.lookfrom = point3(26,3,6);
-    cam.lookat   = point3(0,2,0);
-    cam.vup      = vec3(0,1,0);
-
-    cam.defocus_angle = 0;
-
-    cam.render(world);
+    return parsed;
 }
 
-void cornell_box() {
-    hittable_list world;
+bool parse_sampling_pattern_value(const std::string& value, sampling_pattern& pattern) {
+    if (value == "off" || value == "aa_off" || value == "none" || value == "0") {
+        pattern = sampling_pattern::aa_off;
+        return true;
+    }
 
-    auto red   = make_shared<lambertian>(color(.65, .05, .05));
-    auto white = make_shared<lambertian>(color(.73, .73, .73));
-    auto green = make_shared<lambertian>(color(.12, .45, .15));
-    auto light = make_shared<diffuse_light>(color(15, 15, 15));
+    if (value == "random") {
+        pattern = sampling_pattern::random;
+        return true;
+    }
 
-    world.add(make_shared<quad>(point3(555,0,0), vec3(0,555,0), vec3(0,0,555), green));
-    world.add(make_shared<quad>(point3(0,0,0), vec3(0,555,0), vec3(0,0,555), red));
-    world.add(make_shared<quad>(point3(343, 554, 332), vec3(-130,0,0), vec3(0,0,-105), light));
-    world.add(make_shared<quad>(point3(0,0,0), vec3(555,0,0), vec3(0,0,555), white));
-    world.add(make_shared<quad>(point3(555,555,555), vec3(-555,0,0), vec3(0,0,-555), white));
-    world.add(make_shared<quad>(point3(0,0,555), vec3(555,0,0), vec3(0,555,0), white));
+    if (value == "grid") {
+        pattern = sampling_pattern::grid;
+        return true;
+    }
 
-    world.add(box(point3(130, 0, 65), point3(295, 165, 230), white));
-    world.add(box(point3(265, 0, 295), point3(430, 330, 460), white));
+    if (value == "jittered" || value == "jittered_grid") {
+        pattern = sampling_pattern::jittered_grid;
+        return true;
+    }
 
-    shared_ptr<hittable> box1 = box(point3(0,0,0), point3(165,330,165), white);
-    box1 = make_shared<rotate_y>(box1, 15);
-    box1 = make_shared<translate>(box1, vec3(265,0,295));
-    world.add(box1);
-
-    shared_ptr<hittable> box2 = box(point3(0,0,0), point3(165,165,165), white);
-    box2 = make_shared<rotate_y>(box2, -18);
-    box2 = make_shared<translate>(box2, vec3(130,0,65));
-    world.add(box2);
-
-    camera cam;
-
-    cam.aspect_ratio      = 1.0;
-    cam.image_width       = 600;
-    cam.set_antialiasing(make_shared<random_antialiasing>(100));
-    cam.max_depth         = 50;
-    cam.background        = color(0,0,0);
-
-    cam.vfov     = 40;
-    cam.lookfrom = point3(278, 278, -800);
-    cam.lookat   = point3(278, 278, 0);
-    cam.vup      = vec3(0,1,0);
-
-    cam.defocus_angle = 0;
-
-    cam.render(world);
+    return false;
 }
 
-void cornell_smoke() {
-    hittable_list world;
+sampling_override parse_sampling_override(
+    const std::vector<std::string>& positional,
+    size_t pattern_index,
+    size_t parameter_index,
+    std::string& error
+) {
+    sampling_override result;
+    if (pattern_index >= positional.size()) {
+        return result;
+    }
 
-    auto red   = make_shared<lambertian>(color(.65, .05, .05));
-    auto white = make_shared<lambertian>(color(.73, .73, .73));
-    auto green = make_shared<lambertian>(color(.12, .45, .15));
-    auto light = make_shared<diffuse_light>(color(7, 7, 7));
+    sampling_pattern pattern;
+    if (!parse_sampling_pattern_value(positional[pattern_index], pattern)) {
+        error = "invalid_sampling_pattern";
+        return result;
+    }
 
-    world.add(make_shared<quad>(point3(555,0,0), vec3(0,555,0), vec3(0,0,555), green));
-    world.add(make_shared<quad>(point3(0,0,0), vec3(0,555,0), vec3(0,0,555), red));
-    world.add(make_shared<quad>(point3(113,554,127), vec3(330,0,0), vec3(0,0,305), light));
-    world.add(make_shared<quad>(point3(0,555,0), vec3(555,0,0), vec3(0,0,555), white));
-    world.add(make_shared<quad>(point3(0,0,0), vec3(555,0,0), vec3(0,0,555), white));
-    world.add(make_shared<quad>(point3(0,0,555), vec3(555,0,0), vec3(0,555,0), white));
-
-    shared_ptr<hittable> box1 = box(point3(0,0,0), point3(165,330,165), white);
-    box1 = make_shared<rotate_y>(box1, 15);
-    box1 = make_shared<translate>(box1, vec3(265,0,295));
-
-    shared_ptr<hittable> box2 = box(point3(0,0,0), point3(165,165,165), white);
-    box2 = make_shared<rotate_y>(box2, -18);
-    box2 = make_shared<translate>(box2, vec3(130,0,65));
-
-    world.add(make_shared<constant_medium>(box1, 0.01, color(0,0,0)));
-    world.add(make_shared<constant_medium>(box2, 0.01, color(1,1,1)));
-
-    camera cam;
-
-    cam.aspect_ratio      = 1.0;
-    cam.image_width       = 600;
-    cam.set_antialiasing(make_shared<random_antialiasing>(200));
-    cam.max_depth         = 50;
-    cam.background        = color(0,0,0);
-
-    cam.vfov     = 40;
-    cam.lookfrom = point3(278, 278, -800);
-    cam.lookat   = point3(278, 278, 0);
-    cam.vup      = vec3(0,1,0);
-
-    cam.defocus_angle = 0;
-
-    cam.render(world);
+    result.enabled = true;
+    result.pattern = pattern;
+    result.parameter = parse_int_arg(positional, parameter_index, 1, "invalid_sample_count", error);
+    return result;
 }
 
-int main() {
-    switch (8) {
-        case 1: bouncing_spheres();     break;
-        case 2: checkered_spheres();    break;
-        case 3: earth();                break;
-        case 4: perlin_spheres();       break;
-        case 5: quads();                break;
-        case 6: simple_light();         break;
-        case 7: cornell_box();          break;
-        case 8: cornell_smoke();        break;
+void write_quality_result(std::ostream& out, const quality_result& quality) {
+    if (quality.available) {
+        out << "quality,display_rgb_8bit_ppm,ok,"
+            << std::scientific << std::setprecision(8) << quality.mse << ','
+            << std::fixed << std::setprecision(6) << quality.psnr_db << '\n';
+    } else {
+        out << "quality,none," << (quality.error.empty() ? "none" : quality.error) << ",,\n";
+    }
+}
+
+std::optional<acceleration_structure> parse_acceleration_arg(
+    const std::vector<std::string>& positional,
+    size_t index,
+    std::string& error
+) {
+    if (index >= positional.size()) {
+        return std::nullopt;
+    }
+
+    const std::string& value = positional[index];
+    if (value == "plain" || value == "0") {
+        return acceleration_structure::plain;
+    }
+
+    if (value == "bvh" || value == "1") {
+        return acceleration_structure::bvh;
+    }
+
+    error = "invalid_acceleration";
+    return std::nullopt;
+}
+
+bool requires_square_sample_count(sampling_pattern pattern) {
+    return pattern == sampling_pattern::grid || pattern == sampling_pattern::jittered_grid;
+}
+
+} // namespace
+
+int main(int argc, char* argv[]) {
+    const auto args = parse_arguments(argc, argv);
+    if (!args.error.empty()) {
+        std::cerr << "error," << args.error << '\n';
+        return 1;
+    }
+
+    std::string parse_error;
+    const auto selected_scene = parse_scene_id(args.positional, parse_error);
+    const auto scene_seed = parse_seed_arg(args.positional, 1, 1, "invalid_scene_seed", parse_error);
+    const auto sampling_seed = parse_seed_arg(args.positional, 2, 1, "invalid_sampling_seed", parse_error);
+    const auto acceleration_override = parse_acceleration_arg(args.positional, 3, parse_error);
+    const auto build_seed = parse_seed_arg(
+        args.positional,
+        4,
+        combine_seed(scene_seed, 0xb71d5eedULL),
+        "invalid_build_seed",
+        parse_error
+    );
+    const auto& reference_path = args.reference_path;
+    const auto& output_path = args.output_path;
+    sampling_pattern maybe_pattern;
+    const bool sampling_starts_at_run_arg =
+        args.positional.size() > 5 && parse_sampling_pattern_value(args.positional[5], maybe_pattern);
+    const auto runs = sampling_starts_at_run_arg
+        ? 1
+        : parse_int_arg(args.positional, 5, 1, "invalid_runs", parse_error);
+    const auto sampling = sampling_starts_at_run_arg
+        ? parse_sampling_override(args.positional, 5, 6, parse_error)
+        : parse_sampling_override(args.positional, 6, 7, parse_error);
+
+    if (!parse_error.empty()) {
+        std::cerr << "error," << parse_error << '\n';
+        return 1;
+    }
+
+    if (sampling.enabled &&
+        requires_square_sample_count(sampling.pattern) &&
+        !is_square_sample_count(sampling.parameter)) {
+        std::cerr << "error,grid_sampling_requires_perfect_square_sample_count,"
+                  << sampling.parameter << '\n';
+        return 1;
+    }
+
+    if (runs > 1) {
+        benchmark_case bench;
+        bench.scene = selected_scene;
+        bench.scene_seed = scene_seed;
+        bench.experiment.sampling_seed = sampling_seed;
+        bench.experiment.build_seed = build_seed;
+        bench.experiment.acceleration = acceleration_override;
+        bench.experiment.thread_count = args.thread_count;
+        bench.experiment.tile_size = args.tile_size;
+        if (sampling.enabled) {
+            bench.experiment.sampling_strategy = make_sampling_strategy(sampling.pattern, sampling.parameter);
+            bench.sampling_name = sampling_pattern_name(sampling.pattern);
+            bench.requested_sample_count = sampling.pattern == sampling_pattern::aa_off
+                ? 1
+                : sampling.parameter;
+        }
+        bench.reference_path = reference_path;
+        bench.output_path = output_path;
+        bench.runs = runs;
+
+        const auto results = run_benchmark(bench);
+        write_benchmark_results(std::cerr, results);
+        return 0;
+    }
+
+    auto preset = make_scene(selected_scene, scene_seed);
+    experiment_settings experiment;
+    experiment.sampling_seed = sampling_seed;
+    experiment.acceleration = acceleration_override;
+    experiment.build_seed = build_seed;
+    experiment.show_progress = args.show_progress;
+    experiment.thread_count = args.thread_count;
+    experiment.tile_size = args.tile_size;
+    if (sampling.enabled) {
+        experiment.sampling_strategy = make_sampling_strategy(sampling.pattern, sampling.parameter);
+    }
+    const auto config = make_render_config(preset.settings, experiment);
+
+    const auto acceleration = experiment.acceleration.value_or(preset.settings.default_acceleration);
+    auto world = build_world(preset.geometry, acceleration, experiment.build_seed);
+    render_scene scene{preset.name, preset.cam, std::move(world)};
+
+    const auto prepared_height = static_cast<int>(config.image_width / config.aspect_ratio) < 1
+        ? 1
+        : static_cast<int>(config.image_width / config.aspect_ratio);
+    const auto actual_worker_count = renderer_detail::actual_worker_count(
+        config.image_width,
+        prepared_height,
+        config.tile_size,
+        config.thread_count
+    );
+    const auto use_multi_thread = actual_worker_count > 1;
+    single_thread_renderer single_renderer;
+    multi_thread_renderer multi_renderer;
+    const auto result = use_multi_thread
+        ? multi_renderer.render(scene, config)
+        : single_renderer.render(scene, config);
+    if (!reference_path.empty()) {
+        const auto reference = load_ppm_reference(reference_path);
+        const auto quality = reference.pixels
+            ? compare_to_reference(result.framebuffer, *reference.pixels)
+            : quality_result{false, 0.0, 0.0, reference.error};
+        write_quality_result(std::cerr, quality);
+    }
+    if (!output_path.empty()) {
+        std::ofstream output(output_path, std::ios::binary);
+        if (!output) {
+            std::cerr << "error,could_not_open_output," << output_path << '\n';
+            return 1;
+        }
+        result.framebuffer.write_ppm(output);
+    } else {
+        result.framebuffer.write_ppm(std::cout);
     }
 }

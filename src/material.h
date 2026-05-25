@@ -18,8 +18,13 @@ public:
     }
 
     virtual bool scatter(
-        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered
+        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, random_source& rng
     ) const {
+        (void)r_in;
+        (void)rec;
+        (void)attenuation;
+        (void)scattered;
+        (void)rng;
         return false;
     }
 };
@@ -30,9 +35,9 @@ public:
     lambertian(shared_ptr<texture> tex) : tex(tex) {}
 
     bool scatter(
-        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered
+        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, random_source& rng
     ) const override {
-        auto scatter_direction = rec.normal + random_unit_vector();
+        auto scatter_direction = rec.normal + random_unit_vector(rng);
         if (scatter_direction.near_zero())
             scatter_direction = rec.normal;
 
@@ -49,9 +54,9 @@ public:
     metal(const color& albedo, double fuzz) : albedo(albedo), fuzz(fuzz) {}
 
     bool scatter(
-        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered
+        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, random_source& rng
     ) const override {
-        vec3 reflected = reflect(r_in.direction(), rec.normal) + fuzz*random_unit_vector();
+        vec3 reflected = reflect(r_in.direction(), rec.normal) + fuzz*random_unit_vector(rng);
         scattered = ray(rec.p, reflected, r_in.time());
         attenuation = albedo;
         return (dot(scattered.direction(), rec.normal) > 0);
@@ -66,7 +71,7 @@ public:
     dielectric(double refraction_index) : refraction_index(refraction_index) {};
 
     bool scatter(
-        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered
+        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, random_source& rng
     ) const override {
         attenuation = color(1, 1, 1);
         double ri = rec.front_face ? (1.0/refraction_index) : refraction_index;
@@ -78,7 +83,7 @@ public:
         bool cannot_refract = ri * sin_theta > 1.0;
         vec3 direction;
 
-        if (cannot_refract || reflectance(cos_theta, ri) > random_double())
+        if (cannot_refract || reflectance(cos_theta, ri) > rng.random_double())
             direction = reflect(unit_direction, rec.normal);
         else
             direction = refract(unit_direction, rec.normal, ri);
@@ -114,9 +119,9 @@ class isotropic : public material {
     isotropic(const color& albedo) : tex(make_shared<solid_color>(albedo)) {}
     isotropic(shared_ptr<texture> tex) : tex(tex) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered)
+    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, random_source& rng)
     const override {
-        scattered = ray(rec.p, random_unit_vector(), r_in.time());
+        scattered = ray(rec.p, random_unit_vector(rng), r_in.time());
         attenuation = tex->value(rec.u, rec.v, rec.p);
         return true;
     }

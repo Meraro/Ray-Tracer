@@ -4,9 +4,17 @@
 #include "interval.h"
 #include "rt_common.h"
 #include "aabb.h"
+#include <cstdint>
 #include <memory>
 
 class material;
+
+struct hit_context {
+    std::uint64_t sampling_seed = 1;
+    std::uint64_t pixel_index = 0;
+    int sample_index = 0;
+    int depth = 0;
+};
 
 class hit_record {
     public:
@@ -31,7 +39,7 @@ class hittable {
     public:
         virtual ~hittable() = default;
 
-        virtual bool hit(const ray& r, interval ray_t, hit_record& rec) const = 0;
+        virtual bool hit(const ray& r, interval ray_t, hit_record& rec, const hit_context& context) const = 0;
 
         virtual aabb bounding_box() const = 0;
 };
@@ -44,12 +52,12 @@ public:
         bbox = object->bounding_box() + offset;
     }
 
-    bool hit(const ray& r, interval ray_t, hit_record& rec) const override {
+    bool hit(const ray& r, interval ray_t, hit_record& rec, const hit_context& context) const override {
         // Move the ray backwards by the offset
         ray offset_r(r.origin() - offset, r.direction(), r.time());
 
         // Determine whether an intersection exists along the offset ray (and if so, where)
-        if (!object->hit(offset_r, ray_t, rec))
+        if (!object->hit(offset_r, ray_t, rec, context))
             return false;
 
         // Move the intersection point forwards by the offset
@@ -100,7 +108,7 @@ public:
         bbox = aabb(min, max);
     }
 
-    bool hit(const ray& r, interval ray_t, hit_record& rec) const override {
+    bool hit(const ray& r, interval ray_t, hit_record& rec, const hit_context& context) const override {
 
         // Transform the ray from world space to object space.
 
@@ -120,7 +128,7 @@ public:
 
         // Determine whether an intersection exists in object space (and if so, where).
 
-        if (!object->hit(rotated_r, ray_t, rec))
+        if (!object->hit(rotated_r, ray_t, rec, context))
             return false;
 
         // Transform the intersection from object space back to world space.

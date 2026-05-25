@@ -26,7 +26,8 @@ public:
         bbox = aabb(box1, box2);
     }
 
-    bool hit(const ray& r, interval ray_t, hit_record& rec) const override {
+    bool hit(const ray& r, interval ray_t, hit_record& rec, const hit_context& context) const override {
+        (void)context;
         point3 current_center = center.at(r.time());
         vec3 oc = current_center - r.origin();
         auto a = r.direction().length_squared();
