@@ -50,14 +50,12 @@ enum class random_stream : std::uint64_t {
     path_scatter = 3,
 };
 
-inline std::uint64_t sample_stream_seed(
+inline std::uint64_t pixel_stream_seed(
     std::uint64_t base_seed,
     std::uint64_t pixel_index,
-    int sample_index,
     random_stream stream
 ) {
     auto seed = combine_seed(base_seed, pixel_index);
-    seed = combine_seed(seed, static_cast<std::uint64_t>(sample_index));
     return combine_seed(seed, static_cast<std::uint64_t>(stream));
 }
 
@@ -122,26 +120,25 @@ inline color render_pixel(
     const auto pixel_index = static_cast<std::uint64_t>(j) * image_width + i;
     color pixel_color(0, 0, 0);
 
-    for (int sample_index = 0; sample_index < prepared.sample_count; ++sample_index) {
-        random_source sample_pattern_rng(sample_stream_seed(
+    // Seed once per pixel, then advance independent streams across its samples.
+    // Pixel ownership, rather than worker identity, keeps scheduling irrelevant.
+    random_source sample_pattern_rng(pixel_stream_seed(
             config.sampling_seed,
             pixel_index,
-            sample_index,
             random_stream::sample_pattern
         ));
-        random_source camera_rng(sample_stream_seed(
+    random_source camera_rng(pixel_stream_seed(
             config.sampling_seed,
             pixel_index,
-            sample_index,
             random_stream::camera
         ));
-        random_source path_rng(sample_stream_seed(
+    random_source path_rng(pixel_stream_seed(
             config.sampling_seed,
             pixel_index,
-            sample_index,
             random_stream::path_scatter
         ));
 
+    for (int sample_index = 0; sample_index < prepared.sample_count; ++sample_index) {
         const auto sample = prepared.sampling_strategy->sample(sample_index, sample_pattern_rng);
         ray r = prepared.cam.get_ray(i, j, sample, camera_rng);
         hit_context context{config.sampling_seed, pixel_index, sample_index, 0};

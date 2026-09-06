@@ -26,6 +26,7 @@
 struct benchmark_case {
     scene_id scene;
     std::uint64_t scene_seed = 1;
+    bool use_internal_bvh = true;
     experiment_settings experiment;
     std::string sampling_name = "scene_default";
     int requested_sample_count = 0;
@@ -185,11 +186,11 @@ inline benchmark_run_result run_benchmark_once(
     result.requested_thread_count = std::max(1, bench.experiment.thread_count);
     result.tile_size = bench.experiment.tile_size;
 
+    auto experiment = bench.experiment;
     const auto scene_start = benchmark_detail::clock::now();
-    auto preset = make_scene(bench.scene, bench.scene_seed);
+    auto preset = make_scene(bench.scene, bench.scene_seed, bench.use_internal_bvh);
     const auto scene_end = benchmark_detail::clock::now();
 
-    auto experiment = bench.experiment;
     const auto acceleration = experiment.acceleration.value_or(preset.settings.default_acceleration);
     experiment.show_progress = false;
     const auto config = make_render_config(preset.settings, experiment);
@@ -249,7 +250,11 @@ inline benchmark_run_result run_benchmark_once(
         std::ofstream output(output_path, std::ios::binary);
         if (output) {
             render_result.framebuffer.write_ppm(output);
-            result.output_write_status = "ok";
+            output.flush();
+            const bool write_ok = static_cast<bool>(output);
+            output.close();
+            result.output_write_status = write_ok && output
+                ? "ok" : "failed_to_write_output";
         } else {
             result.output_write_status = "failed_to_open_output";
         }

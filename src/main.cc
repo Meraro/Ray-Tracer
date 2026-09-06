@@ -29,9 +29,14 @@ struct parsed_arguments {
     std::string output_path;
     std::string error;
     bool show_progress = true;
+    bool benchmark = false;
+    bool disable_internal_bvh = false;
     int thread_count = 1;
     int tile_size = 16;
+    std::optional<int> image_width;
 };
+
+bool parse_positive_int_value(const std::string& value, int& parsed);
 
 bool is_option_token(const std::string& value) {
     return value.rfind("--", 0) == 0;
@@ -42,6 +47,23 @@ parsed_arguments parse_arguments(int argc, char* argv[]) {
 
     for (int index = 1; index < argc; ++index) {
         const std::string value = argv[index];
+        if (value == "--benchmark") {
+            result.benchmark = true;
+            continue;
+        }
+        if (value == "--disable-internal-bvh") {
+            result.disable_internal_bvh = true;
+            continue;
+        }
+        if (value == "--width") {
+            int width = 0;
+            if (index + 1 >= argc || !parse_positive_int_value(argv[++index], width)) {
+                result.error = "invalid_image_width";
+            } else {
+                result.image_width = width;
+            }
+            continue;
+        }
         if (value == "--reference" || value == "--ref") {
             if (index + 1 < argc && !is_option_token(argv[index + 1])) {
                 result.reference_path = argv[++index];
@@ -337,15 +359,17 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (runs > 1) {
+    if (args.benchmark || runs > 1) {
         benchmark_case bench;
         bench.scene = selected_scene;
         bench.scene_seed = scene_seed;
+        bench.use_internal_bvh = !args.disable_internal_bvh;
         bench.experiment.sampling_seed = sampling_seed;
         bench.experiment.build_seed = build_seed;
         bench.experiment.acceleration = acceleration_override;
         bench.experiment.thread_count = args.thread_count;
         bench.experiment.tile_size = args.tile_size;
+        bench.experiment.image_width = args.image_width;
         if (sampling.enabled) {
             bench.experiment.sampling_strategy = make_sampling_strategy(sampling.pattern, sampling.parameter);
             bench.sampling_name = sampling_pattern_name(sampling.pattern);
@@ -362,7 +386,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    auto preset = make_scene(selected_scene, scene_seed);
+    auto preset = make_scene(selected_scene, scene_seed, !args.disable_internal_bvh);
     experiment_settings experiment;
     experiment.sampling_seed = sampling_seed;
     experiment.acceleration = acceleration_override;
@@ -370,6 +394,7 @@ int main(int argc, char* argv[]) {
     experiment.show_progress = args.show_progress;
     experiment.thread_count = args.thread_count;
     experiment.tile_size = args.tile_size;
+    experiment.image_width = args.image_width;
     if (sampling.enabled) {
         experiment.sampling_strategy = make_sampling_strategy(sampling.pattern, sampling.parameter);
     }

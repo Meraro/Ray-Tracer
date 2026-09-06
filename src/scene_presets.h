@@ -322,7 +322,7 @@ inline scene_preset cornell_smoke(std::uint64_t scene_seed = 1) {
     return make_scene_preset("cornell_smoke", cam, world, settings, scene_seed);
 }
 
-inline scene_preset final_scene(std::uint64_t scene_seed = 1) {
+inline scene_preset final_scene(std::uint64_t scene_seed = 1, bool use_internal_bvh = true) {
     random_source scene_rng(scene_seed);
     auto world = make_shared<hittable_list>();
 
@@ -344,7 +344,13 @@ inline scene_preset final_scene(std::uint64_t scene_seed = 1) {
         }
     }
 
-    world->add(make_shared<bvh_node>(boxes1, scene_rng));
+    if (use_internal_bvh) {
+        world->add(make_shared<bvh_node>(boxes1, scene_rng));
+    } else {
+        for (const auto& box : boxes1.objects) {
+            world->add(box);
+        }
+    }
 
     auto light = make_shared<diffuse_light>(color(7, 7, 7));
     world->add(make_shared<quad>(point3(123, 554, 147), vec3(300, 0, 0), vec3(0, 0, 265), light));
@@ -381,11 +387,11 @@ inline scene_preset final_scene(std::uint64_t scene_seed = 1) {
         boxes2.add(make_shared<sphere>(point3::random(0, 165, scene_rng), 10, white));
     }
 
+    std::shared_ptr<hittable> sphere_group = use_internal_bvh
+        ? std::static_pointer_cast<hittable>(make_shared<bvh_node>(boxes2, scene_rng))
+        : std::static_pointer_cast<hittable>(make_shared<hittable_list>(boxes2));
     world->add(make_shared<translate>(
-        make_shared<rotate_y>(
-            make_shared<bvh_node>(boxes2, scene_rng),
-            15
-        ),
+        make_shared<rotate_y>(sphere_group, 15),
         vec3(-100, 270, 395)
     ));
 
@@ -407,7 +413,11 @@ inline scene_preset final_scene(std::uint64_t scene_seed = 1) {
     return make_scene_preset("final_scene", cam, world, settings, scene_seed);
 }
 
-inline scene_preset make_scene(scene_id id, std::uint64_t scene_seed = 1) {
+inline scene_preset make_scene(
+    scene_id id,
+    std::uint64_t scene_seed = 1,
+    bool use_internal_bvh = true
+) {
     switch (id) {
         case scene_id::bouncing_spheres:  return bouncing_spheres(scene_seed);
         case scene_id::checkered_spheres: return checkered_spheres(scene_seed);
@@ -417,7 +427,7 @@ inline scene_preset make_scene(scene_id id, std::uint64_t scene_seed = 1) {
         case scene_id::simple_light:      return simple_light(scene_seed);
         case scene_id::cornell_box:       return cornell_box(scene_seed);
         case scene_id::cornell_smoke:     return cornell_smoke(scene_seed);
-        case scene_id::final_scene:       return final_scene(scene_seed);
+        case scene_id::final_scene:       return final_scene(scene_seed, use_internal_bvh);
         default:                          return cornell_smoke(scene_seed);
     }
 }

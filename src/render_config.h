@@ -31,6 +31,7 @@ struct scene_settings {
 };
 
 struct experiment_settings {
+    std::optional<int> image_width;
     std::uint64_t sampling_seed = 1;
     std::uint64_t build_seed = 1;
     std::optional<acceleration_structure> acceleration;
@@ -46,7 +47,7 @@ inline render_config make_render_config(
 ) {
     render_config config;
     config.aspect_ratio = scene.aspect_ratio;
-    config.image_width = scene.image_width;
+    config.image_width = experiment.image_width.value_or(scene.image_width);
     config.max_depth = scene.max_depth;
     config.background = scene.background;
     config.sampling_seed = experiment.sampling_seed;

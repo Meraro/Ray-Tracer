@@ -52,8 +52,11 @@ class constant_medium : public hittable {
 
         auto ray_length = r.direction().length();
         auto distance_inside_boundary = (rec2.t - rec1.t) * ray_length;
-        random_source medium_rng(medium_sample_seed(r, context));
-        auto hit_distance = neg_inv_density * std::log(medium_rng.random_double());
+        // One deterministic uniform sample is enough; avoid initializing a full
+        // MT engine for every volume intersection. Keep it independent of traversal.
+        const auto bits = mix_seed(medium_sample_seed(r, context));
+        const double uniform = static_cast<double>(bits >> 11) * 0x1.0p-53;
+        auto hit_distance = neg_inv_density * std::log1p(-uniform);
 
         if (hit_distance > distance_inside_boundary)
             return false;
